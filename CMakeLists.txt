@@ -46,6 +46,10 @@ file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
 add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
 target_link_libraries(triton ${LLVM_LIBRARIES} ${LLVM_SYSTEM_LIBS})
 
+# Tools
+add_executable(triton-cc tools/triton-cc/triton-cc.cc)
+target_link_libraries(triton-cc triton)
+
 if(BUILD_PYTHON_MODULE)
     target_link_libraries(triton ${TORCH_LIBRARIES})
 endif()

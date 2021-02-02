@@ -1,0 +1,81 @@
+#define STM 8
+#define STN 8
+__global__ void dot(float * A __noalias __readonly __aligned(16),
+                    float * B __noalias __readonly __aligned(16),
+                    float * C __noalias __aligned(16),
+                    float alpha,
+                    int M __retune,
+                    int N __retune,
+                    int K __retune __multipleof(16),
+                    int lda __multipleof(8),
+                    int ldb __multipleof(8),
+                    int ldc __multipleof(8),
+                    int* locks) {
+      // prologue
+      int pid = get_program_id(0);
+      int pidz = get_program_id(2);
+      int gridm = (M + 128 - 1) / 128;
+      int gridn = (N + 128 - 1) / 128;
+      int width = STM*gridn;
+      int stm = pid / width;
+      int RSTM  = min(gridm - stm*STM, STM);
+      int stn =  (pid % width) / (RSTM*STN);
+      int RSTN = min(gridn - stn*STN, STN);
+      int laneid = pid % (RSTM * RSTN);
+      int lanem = laneid / RSTN;
+      int lanen = laneid % RSTN;
+      int pidm = stm*STM + lanem;
+      int pidn = stn*STN + lanen;
+      int rm[128] = pidm * 128 + 0 ... 128;
+      int rn[128] = pidn * 128 + 0 ... 128;
+      // reduction splitting
+      K           = K / 1;
+      int rk[32]  = pidz * K + 0 ... 32;
+      // pointers to operands
+      int offa[128, 32] = rk[newaxis, :] * 1 + rm[:, newaxis] * lda;
+      int offb[32, 128] = rk[:, newaxis] * ldb + rn[newaxis, :] * 1;
+      float* pa[128, 32] = A + offa;
+      float* pb[32, 128] = B + offb;
+      // prefetches operands
+      bool checka[128, 32] = rk[newaxis, :] < K;
+      bool checkb[32, 128] = rk[:, newaxis] < K;
+      float a[128, 32] = checka ? *pa : 0;
+      float b[32, 128] = checkb ? *pb : 0;
+      pa += 32 * 1;
+      pb += 32 * ldb;
+      // reduction loop
+      float acc[128, 128] = 0;
+      for(int k = K; k > 0; k -= 32){
+        bool checka[128, 32] = k > 32;
+        bool checkb[32, 128] = k > 32;
+        acc += a @ b;
+        a = *?(checka)pa;
+        b = *?(checkb)pb;
+        pa += 32 * 1;
+        pb += 32 * ldb;
+      }
+      acc = acc * alpha;
+      float c[128, 128] = acc;
+      // epilogue
+      int rcm[128] = pidm * 128 + 0 ... 128;
+      int rcn[128] = pidn * 128 + 0 ... 128;
+      int offc[128, 128] = rcm[:, newaxis] * ldc + rcn[newaxis, :];
+      float* pc[128, 128] = C + offc;
+      bool checkc[128, 128] = rcm[:, newaxis] < M &&
+                            rcn[newaxis, :] < N;
+#if (1==1)
+      *?(checkc) pc = c;
+#else
+      // accumulate partial result using spin-locks
+      int *plock  = locks + rid;
+      int *pcount = plock + get_num_programs(0) * get_num_programs(1);
+      for(int repeat = 1; repeat == 1; repeat = atomic_cas(plock, 0, 1));
+      int count = *pcount;
+      if(count == 0)
+        *?(checkc) pc = c;
+      else
+        *?(checkc) pc = c + *?(checkc)pc;
+      atomic_xchg(pcount, (count + 1) % 1);
+      atomic_xchg(plock, 0);
+#endif
+}
